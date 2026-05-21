@@ -1,4 +1,4 @@
-# BackgroundDB
+# BackupDB
 
 Database backup and restore utility that targets multiple DBMS engines with flexible storage backends.
 
