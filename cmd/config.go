@@ -14,7 +14,7 @@ var configCmd = &cobra.Command{
 	Short: "Show resolved configuration",
 	Long:  "Load configuration from all sources, redact credentials, and output resolved settings",
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg, err := config.LoadConfig(cfgFile)
+		cfg, err := config.LoadConfig(v, cfgFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error loading configuration: %v\n", err)
 			os.Exit(ExitInvalidInput)

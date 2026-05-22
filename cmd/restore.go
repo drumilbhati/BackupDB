@@ -11,7 +11,7 @@ var restoreCmd = &cobra.Command{
 	Short: "Restore from a backup",
 	Long:  "Restore a database from a local or cloud-stored backup file",
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg, err := config.LoadConfig(cfgFile)
+		cfg, err := config.LoadConfig(v, cfgFile)
 		if err != nil {
 			PrintResult(v.GetString("output.format"), nil, err, ExitInvalidInput)
 		}

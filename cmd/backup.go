@@ -11,7 +11,7 @@ var backupCmd = &cobra.Command{
 	Short: "Create a database backup",
 	Long:  "Create a full/incremental/differential backup of a database and persist it to a storage target",
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg, err := config.LoadConfig(cfgFile)
+		cfg, err := config.LoadConfig(v, cfgFile)
 		if err != nil {
 			PrintResult(v.GetString("output.format"), nil, err, ExitInvalidInput)
 		}

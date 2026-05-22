@@ -11,7 +11,7 @@ var validateCmd = &cobra.Command{
 	Short: "Validate database credentials and connectivity",
 	Long:  "Perform a connection preflight check to ensure the target database can be accessed",
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg, err := config.LoadConfig(cfgFile)
+		cfg, err := config.LoadConfig(v, cfgFile)
 		if err != nil {
 			PrintResult(v.GetString("output.format"), nil, err, ExitInvalidInput)
 		}

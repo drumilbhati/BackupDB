@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"time"
@@ -73,6 +74,7 @@ func (h *PostgresHandler) StreamBackup(ctx *BackupContext, sink io.Writer) (*Bac
 	cmd := exec.Command("pg_dump", ctx.CmdArgs...)
 	
 	// Set password env var
+	cmd.Env = os.Environ()
 	if ctx.DBConfig.Password != "" {
 		cmd.Env = append(cmd.Env, "PGPASSWORD="+ctx.DBConfig.Password)
 	}
@@ -125,6 +127,7 @@ func (h *PostgresHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (
 	// We use psql to restore plain SQL format backups
 	cmd := exec.Command("psql", ctx.CmdArgs...)
 	
+	cmd.Env = os.Environ()
 	if ctx.DBConfig.Password != "" {
 		cmd.Env = append(cmd.Env, "PGPASSWORD="+ctx.DBConfig.Password)
 	}

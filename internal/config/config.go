@@ -69,8 +69,7 @@ type OutputConfig struct {
 }
 
 // LoadConfig resolves configuration from the config file, environment variables, defaults, and CLI flags.
-func LoadConfig(cfgFile string) (*Config, error) {
-	v := viper.New()
+func LoadConfig(v *viper.Viper, cfgFile string) (*Config, error) {
 
 	// 1. Set Defaults
 	setDefaults(v)

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"time"
@@ -66,6 +67,7 @@ func (h *MySQLHandler) PrepareBackup(cfg *config.Config) (*BackupContext, error)
 func (h *MySQLHandler) StreamBackup(ctx *BackupContext, sink io.Writer) (*BackupStats, error) {
 	cmd := exec.Command("mysqldump", ctx.CmdArgs...)
 	
+	cmd.Env = os.Environ()
 	if ctx.DBConfig.Password != "" {
 		cmd.Env = append(cmd.Env, "MYSQL_PWD="+ctx.DBConfig.Password)
 	}
@@ -117,6 +119,7 @@ func (h *MySQLHandler) PrepareRestore(cfg *config.Config) (*RestoreContext, erro
 func (h *MySQLHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (*RestoreStats, error) {
 	cmd := exec.Command("mysql", ctx.CmdArgs...)
 	
+	cmd.Env = os.Environ()
 	if ctx.DBConfig.Password != "" {
 		cmd.Env = append(cmd.Env, "MYSQL_PWD="+ctx.DBConfig.Password)
 	}

@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"testing"
+
+	"github.com/spf13/viper"
 )
 
 func TestConfigValidation(t *testing.T) {
@@ -160,7 +162,7 @@ func TestLoadConfigEnvAndDefaults(t *testing.T) {
 		os.Unsetenv("BACKUPDB_DB_PASSWORD")
 	}()
 
-	cfg, err := LoadConfig("")
+	cfg, err := LoadConfig(viper.New(), "")
 	if err != nil {
 		t.Fatalf("Failed to load config: %v", err)
 	}
