@@ -1,296 +1,282 @@
 # BackupDB
 
-Database backup and restore utility that targets multiple DBMS engines with flexible storage backends.
+`BackupDB` is a powerful, production-grade, cross-platform command-line utility for backing up and restoring databases across multiple DBMS engines to local or cloud-based storage backends.
 
-## Design diagram
+It supports PostgreSQL, MySQL, MongoDB, and SQLite, with seamless integrations for AWS S3, Google Cloud Storage (GCS), Azure Blob Storage, and the Local Filesystem.
 
-```mermaid
-flowchart LR
-  CLI[CLI] --> Config[Config]
-  Config --> Orchestrator[Orchestrator]
-  Orchestrator --> DBHandler[DBHandler\nCommon Interface\nValidate Connection]
+For details on architecture and design decisions, see [IMPLEMENTATION.md](file:///Users/drumilbhati/Documents/BackupDB/IMPLEMENTATION.md).
 
-  DBHandler --> PostgresHandler[PostgresHandler]
-  DBHandler --> MySQLHandler[MySQLHandler]
-  DBHandler --> MongoDBHandler[MongoDBHandler]
-  DBHandler --> SQLiteHandler[SQLiteHandler]
+---
 
-  PostgresHandler --> Postgres[Postgres]
-  MySQLHandler --> MySQL[MySQL]
-  MongoDBHandler --> MongoDB[MongoDB]
-  SQLiteHandler --> SQLite[SQLite]
+## Key Features
 
-  Postgres --> StorageInterface[Storage Interface]
-  MySQL --> StorageInterface
-  MongoDB --> StorageInterface
-  SQLite --> StorageInterface
+- **Multi-DBMS Support**: Full backup and restore execution on PostgreSQL, MySQL, MongoDB, and SQLite.
+- **Flexible Storage Adapters**: Direct stream uploads/downloads using official cloud SDKs (AWS, GCS, Azure) or local files.
+- **On-the-Fly Compression**: Support for `gzip` and `zstd` (via high-performance `klauspost/compress/zstd`) stream compression.
+- **Integrity Validation**: Computes and tracks exact SHA256 checksums and file sizes on-the-fly during pipeline streaming.
+- **Credentials Security**: Automatically redacts database passwords and cloud API keys from logs and configuration dumps.
+- **Slack Integrations**: Notifies a Slack channel on success/failure using secure webhook integrations.
+- **Config Precedence**: Viper-based configuration loading hierarchy (CLI Flags > Environment Variables > YAML file > Defaults).
+- **Automation Ready**: Output formatted as clean, structured JSON or human-readable Text with deterministic exit codes.
 
-  StorageInterface --> S3[AWS S3]
-  StorageInterface --> GCS[Google Cloud Storage]
-  StorageInterface --> Azure[Azure Blob Storage]
+---
+
+## Getting Started
+
+### Prerequisites
+
+To perform backups, the respective native database CLI utility must be installed and accessible in the system's `PATH`:
+- `pg_dump` and `psql` (PostgreSQL)
+- `mysqldump` and `mysql` (MySQL)
+- `mongodump` and `mongorestore` (MongoDB)
+- `sqlite3` (SQLite)
+
+### Build the Binary
+
+Compile the command-line utility:
+```bash
+go build -o bin/backupdb main.go
 ```
 
-## Design explanation (mapped to the problem statement)
+The resulting `bin/backupdb` binary is fully self-contained and cross-platform.
 
-**CLI → Config** captures all required connection parameters (host, port, username, password, database name), backup/restore mode, compression preferences, and storage target. This layer is responsible for validating that mandatory inputs are present and for providing clear help and defaults, directly supporting the usability and portability goals.
+---
 
-**Orchestrator** coordinates the end-to-end workflow for both backup and restore. It selects the correct DB handler based on the DBMS type, enforces connection validation before any operation, and ensures failures are surfaced with clear errors. It is also the right place to record start/end time, duration, status, and errors, and to trigger optional Slack notifications after completion, aligning with the logging and notification requirements.
+## CLI Usage Guide
 
-**DBHandler (Common Interface / Validate Connection)** provides a single contract across all database engines. Each concrete handler (Postgres/MySQL/MongoDB/SQLite) implements DB-specific backup and restore logic, including selective restore when the engine allows it, and full/incremental/differential backups when available. This isolates DBMS differences while keeping reliability and performance goals intact (e.g., using incremental/differential strategies to reduce load on large databases).
+`backupdb` utilizes a command/subcommand pattern with the following commands:
 
-**Storage Interface** abstracts how backup artifacts are persisted. The diagram shows cloud targets (AWS S3, Google Cloud Storage, Azure Blob Storage); the same interface also supports local filesystem storage as required. By keeping storage behind a dedicated interface, the system can stream compressed backups to different destinations without changing DB-specific logic, improving scalability and reliability across platforms.
+```bash
+backupdb [command] [flags]
+```
 
-## LLD solution
+### Commands
 
-### CLI
+| Command | Description |
+| :--- | :--- |
+| `validate` | Validates DBMS credentials and verifies server connectivity. |
+| `backup` | Triggers the backup pipeline (connect, dump, compress, checksum, upload, notify). |
+| `restore` | Triggers the restore pipeline (download, decompress, database import). |
+| `config` | Merges configurations from all sources, redacts credentials, and outputs resolved settings. |
+| `version` | Prints the utility version (current version `1.0.0`). |
 
-The CLI is a single cross-platform binary (`backupdb`) with subcommands. It parses flags, loads configuration, validates inputs, and invokes the orchestrator with a normalized request object.
+---
 
-**Commands**
+## Configuration & Flags
 
-| Command | Purpose | Required inputs (core) |
-|---|---|---|
-| `backup` | Create a backup | `--db`, `--host`, `--port`, `--user`, `--password`, `--database`, `--storage` |
-| `restore` | Restore from a backup | `--db`, `--backup-path`, `--database` |
-| `validate` | Validate connection only | `--db`, `--host`, `--port`, `--user`, `--password`, `--database` |
-| `config` | Show/validate resolved config | none |
-| `version` | Print version | none |
-| `help` | CLI help | none |
+### Global Flags
 
-**Option groups (core contract)**
+These flags can be appended to any command:
 
-| Category | Options |
-|---|---|
-| DB selection | `--db {postgres|mysql|mongodb|sqlite}` |
-| Connection | `--host`, `--port`, `--user`, `--password`, `--database` |
-| Backup mode | `--mode {full|incremental|differential}` |
-| Compression | `--compress {none|gzip|zstd}`, `--compression-level` |
-| Storage | `--storage {local|s3|gcs|azure}` plus provider flags (e.g., bucket/container, region, prefix, credentials) |
-| Restore scope | `--tables` / `--collections` (DB-specific, optional) |
-| Logging | `--log-file`, `--log-level` |
-| Notifications | `--slack-webhook` (optional) |
-| Output | `--output {text|json}` |
+- `--config <path>`: Path to a YAML configuration file (default is `./backupdb.yaml`).
+- `--log-level <level>`: Logging level (`debug`, `info`, `warn`, `error`, default is `info`).
+- `--log-file <path>`: Log file path (defaults to stdout).
+- `--slack-webhook <url>`: Slack incoming webhook URL for notifications.
+- `--output <format>`: Format for command results (`text` or `json`, default is `text`).
 
-**Configuration precedence**
+---
 
-1. CLI flags  
-2. Environment variables (prefix `BACKUPDB_`)  
-3. Config file  
-4. Defaults
+### Command-Specific Flags
 
-**Config file contract (YAML example)**
+#### 1. Database Selection & Connectivity
+Applied to `validate`, `backup`, and `restore` commands:
+- `--db <engine>`: Target DBMS engine (`postgres`, `mysql`, `mongodb`, `sqlite`).
+- `--host <host>`: Database server host address.
+- `--port <port>`: Database server port number.
+- `--user <user>`: Database login username.
+- `--password <pass>`: Database login password.
+- `--database <db>`: Database name (or the direct file path when using `sqlite`).
+
+#### 2. Backup Preferences
+Applied to the `backup` command:
+- `--mode <mode>`: Backup mode (`full`, `incremental`, `differential`, default is `full`).
+- `--compress <algo>`: Compression format (`none`, `gzip`, `zstd`, default is `gzip`).
+- `--compression-level <level>`: Compression tuning level.
+
+#### 3. Restore Preferences
+Applied to the `restore` command:
+- `--backup-path <path>`: Path or cloud storage URI to the backup archive to restore from.
+- `--tables <list>`: Comma-separated list of tables to selectively restore (Postgres/MySQL only).
+- `--collections <list>`: Comma-separated list of collections to selectively restore (MongoDB only).
+
+#### 4. Storage Adapter Options
+Applied to `backup` and `restore` commands:
+- `--storage <type>`: Storage backend adapter (`local`, `s3`, `gcs`, `azure`).
+- `--local-path <path>`: Path to a local directory for file storage (Local adapter).
+- `--bucket <bucket>`: Bucket name (AWS S3 & Google Cloud Storage adapters).
+- `--prefix <prefix>`: Prefix path/key namespace (S3, GCS, Azure Blob).
+- `--region <region>`: AWS Region (S3 adapter).
+- `--endpoint <url>`: Custom S3-compatible API endpoint URL (e.g. MinIO).
+- `--access-key <key>`: AWS access key ID (S3 adapter).
+- `--secret-key <key>`: AWS secret access key (S3 adapter).
+- `--container <name>`: Blob container name (Azure Blob Storage adapter).
+- `--azure-account-name <name>`: Azure storage account name.
+- `--azure-account-key <key>`: Azure storage account credentials key.
+- `--gcs-credentials-file <path>`: Path to Google Service Account JSON credentials file.
+
+---
+
+## Configuration Precedence & YAML Profile
+
+Configurations can be passed using flags, environment variables prefixed with `BACKUPDB_`, or a YAML configuration file.
+
+### YAML Config Profile Example (`backupdb.yaml`)
 
 ```yaml
 db:
   type: postgres
   host: localhost
   port: 5432
-  user: backup
-  password: ${BACKUPDB_PASSWORD}
-  database: app
+  user: postgres
+  password: supersecretpassword
+  database: mydb
 backup:
   mode: full
-  compress: gzip
+  compress: zstd
 storage:
   type: s3
-  bucket: my-backups
-  prefix: prod/
+  bucket: production-database-backups
+  region: us-west-2
+  access_key: AKIAIOSFODNN7EXAMPLE
+  secret_key: wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 logging:
   level: info
+  file: ./backupdb.log
 notifications:
-  slackWebhook: https://hooks.slack.com/...
+  slack_webhook: https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX
+output:
+  format: text
 ```
 
-**Validation and execution flow**
+---
 
-The `validate` command performs connection checks only. `backup` and `restore` always invoke the same validation routine before performing any operation. Missing or incompatible flags (e.g., incremental mode for an unsupported DBMS) return an error with actionable messaging.
+## Examples
 
-**Exit codes (enum-backed)**
+### 1. SQLite Backups
 
-| Enum | Code |
-|---|---|
-| `Success` | 0 |
-| `InvalidInput` | 2 |
-| `ConnectionFailure` | 3 |
-| `BackupFailure` | 4 |
-| `RestoreFailure` | 5 |
-| `StorageFailure` | 6 |
-
-**Output contract**
-
-`text` output is human-friendly and concise; `json` output is machine-friendly and stable for automation. Errors never include secrets, and logging does not echo passwords or access keys.
-
-### Config
-
-The Config service resolves inputs from CLI flags, environment variables, and a config file; applies defaults; validates requirements; and returns a normalized configuration object for the orchestrator.
-
-**Responsibilities**
-
-1. Load and merge config sources with precedence (flags > env > file > defaults).
-2. Validate required fields and DB/storage-specific constraints.
-3. Normalize values into a single `Config` object.
-4. Redact secrets for logs and diagnostics.
-
-**Interfaces**
-
-- `ResolveConfig(inputs) -> Config`
-- `ValidateConfig(config) -> Diagnostic[]`
-- `Redact(config) -> SafeConfig`
-
-**Schema (core fields)**
-
-| Section | Key fields |
-|---|---|
-| `db` | `type`, `host`, `port`, `user`, `password`, `database` |
-| `backup` | `mode`, `compress`, `compressionLevel` |
-| `storage` | `type`, `bucket/container`, `region`, `prefix`, `credentials` |
-| `restore` | `backupPath`, `tables/collections` |
-| `logging` | `level`, `file` |
-| `notifications` | `slackWebhook` |
-| `output` | `format` |
-
-**Resolution flow**
-
-1. Load config file (explicit path or default).
-2. Load env vars with `BACKUPDB_` prefix.
-3. Parse CLI flags.
-4. Merge values by precedence and apply defaults.
-5. Validate and return.
-
-**Validation rules**
-
-- Required: `db.type`, connection params, `storage.type` (backup), `backupPath` (restore).
-- DB-specific constraints (e.g., `sqlite` ignores host/port; `mongodb` may accept URI).
-- Mode support: reject incremental/differential where unsupported.
-- Storage-specific fields: require bucket/container/region/credentials when needed.
-
-**Error handling**
-
-Fail fast with actionable messages (e.g., “--storage s3 requires --bucket”), and never include secrets in errors or logs.
-
-### Orchestrator
-
-The Orchestrator coordinates backup/restore execution by selecting handlers, enforcing validation, and driving the workflow lifecycle.
-
-**Responsibilities**
-
-1. Map resolved config to DB and storage handlers.
-2. Run preflight validation (config + connection) before any operation.
-3. Execute backup/restore stages in order.
-4. Standardize error handling and map to exit codes.
-5. Emit lifecycle events and trigger optional notifications.
-
-**Interfaces**
-
-- `RunBackup(request: BackupRequest) -> Result<BackupOutcome, OrchestratorError>`
-- `RunRestore(request: RestoreRequest) -> Result<RestoreOutcome, OrchestratorError>`
-- `SelectDbHandler(dbType) -> DbHandler`
-- `SelectStorageAdapter(storageType) -> StorageAdapter`
-
-**Input/Output contracts**
-
-- **BackupRequest**: `db` (type, connection, mode, compression), `storage` (destination, credentials), `logging`, `notifications`, `output`.
-- **BackupOutcome**: `backupId`, `artifactUri`, `bytes`, `checksum`, `duration`, `status`.
-- **RestoreRequest**: `db`, `backupPath`, `scope`, `storage`.
-- **RestoreOutcome**: `restoredObjects`, `duration`, `status`.
-
-**Workflow (backup)**
-
-1. Validate config.
-2. `DbHandler.ValidateConnection`.
-3. `DbHandler.PrepareBackup`.
-4. `DbHandler.StreamBackup` → `StorageAdapter.Write`.
-5. `DbHandler.FinalizeBackup`.
-6. Emit logs/metrics and optional Slack notification.
-
-**Workflow (restore)**
-
-1. Validate config.
-2. `DbHandler.ValidateConnection`.
-3. `StorageAdapter.Read` → `DbHandler.StreamRestore`.
-4. `DbHandler.FinalizeRestore`.
-5. Emit logs/metrics and optional Slack notification.
-
-**Error model**
-
-Wrap lower-level failures into `OrchestratorError` with `kind` (Validation, Connection, Backup, Restore, Storage), an actionable `message`, and optional `cause`. Map `kind` to the exit code enum.
-
-### DBHandler
-
-The DBHandler interface defines the common contract each DB engine implements so the Orchestrator can run a uniform workflow.
-
-**Interface (LLD)**
-
-```
-interface DbHandler {
-  ValidateConnection(conn: DbConnection) -> Result<void, DbError>
-
-  PrepareBackup(req: BackupRequest) -> Result<BackupContext, DbError>
-  StreamBackup(ctx: BackupContext, sink: OutputStream) -> Result<BackupStats, DbError>
-  FinalizeBackup(ctx: BackupContext, stats: BackupStats) -> Result<void, DbError>
-
-  PrepareRestore(req: RestoreRequest) -> Result<RestoreContext, DbError>
-  StreamRestore(ctx: RestoreContext, source: InputStream) -> Result<RestoreStats, DbError>
-  FinalizeRestore(ctx: RestoreContext, stats: RestoreStats) -> Result<void, DbError>
-
-  SupportsMode(mode: BackupMode) -> bool
-  SupportsSelectiveRestore() -> bool
-}
+**Backup to Local Directory:**
+```bash
+bin/backupdb backup \
+  --db sqlite \
+  --database /data/production.db \
+  --storage local \
+  --local-path /backups/sqlite \
+  --compress zstd
 ```
 
-**Behavior**
-
-- `ValidateConnection` runs before any operation.
-- `Prepare*` and `Finalize*` allow DB-specific setup/cleanup.
-- `StreamBackup/StreamRestore` enable streaming to reduce memory usage.
-- `SupportsMode` and `SupportsSelectiveRestore` let the Orchestrator enforce constraints.
-
-### Storage Interface
-
-The Storage Interface is a single abstraction used by all DB handlers to persist and retrieve backup artifacts across different backends.
-
-**Responsibilities**
-
-1. Accept backup streams/artifacts and persist them to the selected backend.
-2. Read artifacts back for restore.
-3. Produce stable artifact references (URI + metadata).
-4. Validate storage-specific requirements (credentials, bucket/container, path/prefix).
-5. Ensure integrity (checksum) and handle retryable failures.
-
-**Interface (LLD)**
-
-```
-interface StorageAdapter {
-  ValidateTarget(config: StorageConfig) -> Result<void, StorageError>
-
-  Write(
-    input: InputStream,
-    meta: ArtifactMetadata
-  ) -> Result<ArtifactRef, StorageError>
-
-  Read(
-    ref: ArtifactRef
-  ) -> Result<InputStream, StorageError>
-}
+**Restore from Local File:**
+```bash
+bin/backupdb restore \
+  --db sqlite \
+  --database /data/restored_production.db \
+  --storage local \
+  --backup-path /backups/sqlite/sqlite/backup_20260522_120000.sql.zst
 ```
 
-**Core contracts**
+---
 
-- `ArtifactMetadata`: `dbType`, `backupMode`, `timestamp`, `checksum`, `sizeBytes`, `compression`, `labels`
-- `ArtifactRef`: `uri`, `storageType`, `checksum`, `sizeBytes`
+### 2. PostgreSQL Backups
 
-**Adapter selection**
+**Validate Connectivity:**
+```bash
+bin/backupdb validate \
+  --db postgres \
+  --host 127.0.0.1 \
+  --port 5432 \
+  --user app_owner \
+  --password secret \
+  --database production_db
+```
 
-- `StorageFactory.Select(storageType) -> StorageAdapter`
-- Implementations: `LocalStorageAdapter`, `S3StorageAdapter`, `GCSStorageAdapter`, `AzureBlobStorageAdapter`
+**Backup PostgreSQL to S3:**
+```bash
+bin/backupdb backup \
+  --db postgres \
+  --host 127.0.0.1 \
+  --port 5432 \
+  --user app_owner \
+  --password secret \
+  --database production_db \
+  --storage s3 \
+  --bucket prod-backups-bucket \
+  --region us-east-1 \
+  --compress gzip
+```
 
-**Workflow**
+**Restore PostgreSQL from S3 URI:**
+```bash
+bin/backupdb restore \
+  --db postgres \
+  --host 127.0.0.1 \
+  --port 5432 \
+  --user app_owner \
+  --password secret \
+  --database production_db \
+  --storage s3 \
+  --backup-path s3://prod-backups-bucket/postgres/backup_20260522_120000.sql.gz
+```
 
-1. Orchestrator selects adapter from config.
-2. `ValidateTarget` runs.
-3. `DbHandler.StreamBackup` → `StorageAdapter.Write`.
-4. `StorageAdapter.Read` → `DbHandler.StreamRestore`.
+---
 
-**Error model**
+### 3. MySQL Backups
 
-`StorageError.kind`: `Config`, `Auth`, `Network`, `Quota`, `NotFound`, `Integrity` mapped to `StorageFailure`.
+**Backup to Azure Blob Storage:**
+```bash
+bin/backupdb backup \
+  --db mysql \
+  --host 127.0.0.1 \
+  --port 3306 \
+  --user root \
+  --password rootpass \
+  --database main_store \
+  --storage azure \
+  --container db-backups \
+  --azure-account-name storageaccountname \
+  --azure-account-key accountkeycontents \
+  --compress gzip
+```
+
+**Restore from Azure Blob URI:**
+```bash
+bin/backupdb restore \
+  --db mysql \
+  --host 127.0.0.1 \
+  --port 3306 \
+  --user root \
+  --password rootpass \
+  --database main_store \
+  --storage azure \
+  --backup-path https://storageaccountname.blob.core.windows.net/db-backups/mysql/backup_20260522_120000.sql.gz
+```
+
+---
+
+### 4. MongoDB Backups
+
+**Backup to Google Cloud Storage (GCS):**
+```bash
+bin/backupdb backup \
+  --db mongodb \
+  --host 127.0.0.1 \
+  --port 27017 \
+  --database admin \
+  --storage gcs \
+  --bucket mongo-backups-gcs \
+  --gcs-credentials-file /keys/gcs-service-account.json \
+  --compress zstd
+```
+
+---
+
+## Exit Codes
+
+`backupdb` outputs deterministic exit codes to simplify pipeline orchestration:
+
+| Exit Code | Constant Name | Cause |
+| :--- | :--- | :--- |
+| `0` | `ExitSuccess` | The operation completed successfully. |
+| `2` | `ExitInvalidInput` | Provided parameters/configurations are incorrect or missing. |
+| `3` | `ExitConnectionFailure`| Connecting to the target database server failed. |
+| `4` | `ExitBackupFailure` | Database export pipeline run failed. |
+| `5` | `ExitRestoreFailure` | Database import pipeline run failed. |
+| `6` | `ExitStorageFailure` | Interacting with the selected storage backend failed. |
