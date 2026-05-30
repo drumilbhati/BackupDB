@@ -40,6 +40,29 @@ go build -o bin/backupdb main.go
 
 The resulting `bin/backupdb` binary is fully self-contained and cross-platform.
 
+### Local Database Test Stack
+
+To test the tool against live database containers, start the local stack:
+
+```bash
+docker compose -f docker-compose.test.yml up -d
+```
+
+This starts:
+- PostgreSQL on `127.0.0.1:5432` with user/password `backupdb` and database `appdb`
+- MySQL on `127.0.0.1:3306` with user/password `backupdb` and database `appdb`
+- MongoDB on `127.0.0.1:27017` with database `appdb`
+
+Seed data is created automatically in each container so you can validate, back up, and restore immediately.
+
+Example commands:
+
+```bash
+bin/backupdb validate --db postgres --host 127.0.0.1 --port 5432 --user backupdb --password backupdb --database appdb
+bin/backupdb backup --db mysql --host 127.0.0.1 --port 3306 --user backupdb --password backupdb --database appdb --storage local --local-path ./backups/mysql
+bin/backupdb backup --db mongodb --host 127.0.0.1 --port 27017 --database appdb --storage local --local-path ./backups/mongo
+```
+
 ---
 
 ## CLI Usage Guide
