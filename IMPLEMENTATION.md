@@ -9,6 +9,9 @@ This document contains the architecture diagrams, design justifications, and Low
 ```mermaid
 flowchart LR
   CLI[CLI] --> Config[Config]
+  CLI --> TUI[TUI]
+  TUI --> Config
+  TUI --> Orchestrator
   Config --> Orchestrator[Orchestrator]
   Orchestrator --> DBHandler[DBHandler\nCommon Interface\nValidate Connection]
 
@@ -38,6 +41,7 @@ flowchart LR
 ## Design Explanation (Mapped to Problem Statement)
 
 - **CLI & Config**: The CLI layer captures all database configurations (engine type, credentials, host/port, database name), backup/restore mode, compression formats, and storage backend settings. The configuration layer resolves these with strict precedence (CLI flags > Environment variables > Configuration file > Defaults) and redacts secrets when emitting logs or outputs.
+- **TUI & Config**: The terminal UI is a second entry point for the same execution pipeline. It reuses config loading and validation, then hands off to the orchestrator instead of duplicating backup logic.
 - **Orchestrator**: Enforces a robust orchestrating workflow for backup and restore operations. It queries the target database connection, validates the storage backend targets, coordinates compression pipeline streaming, calculates integrity hashes (SHA256) on-the-fly, and triggers completion callbacks (e.g., Slack notification webhooks) upon termination.
 - **DBHandler (Common Interface)**: Exposes a standardized contract ([DbHandler](file:///Users/drumilbhati/Documents/BackupDB/internal/db/db.go)) across all target DBMS engines (Postgres, MySQL, MongoDB, SQLite). DB-specific details such as streaming commands (`pg_dump`, `mysqldump`, `mongodump`, SQLite file copies) are encapsulated behind this interface.
 - **Storage Interface**: Exposes a standardized contract ([StorageAdapter](file:///Users/drumilbhati/Documents/BackupDB/internal/storage/storage.go)) for artifact persistence across different storage providers (Local, S3, GCS, Azure Blob). This enables the Orchestrator to stream backup and restore payloads directly to and from these backends without coupling database logic to the storage provider.
