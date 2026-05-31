@@ -83,7 +83,7 @@ func (h *MongoDBHandler) PrepareBackup(cfg *config.Config) (*BackupContext, erro
 func (h *MongoDBHandler) StreamBackup(ctx *BackupContext, sink io.Writer) (*BackupStats, error) {
 	cmd := exec.Command("mongodump", ctx.CmdArgs...)
 	cmd.Stdout = sink
-	
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -135,7 +135,7 @@ func (h *MongoDBHandler) PrepareRestore(cfg *config.Config) (*RestoreContext, er
 func (h *MongoDBHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (*RestoreStats, error) {
 	cmd := exec.Command("mongorestore", ctx.CmdArgs...)
 	cmd.Stdin = source
-	
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -159,7 +159,12 @@ func (h *MongoDBHandler) FinalizeRestore(ctx *RestoreContext, stats *RestoreStat
 }
 
 func (h *MongoDBHandler) SupportsMode(mode string) bool {
-	return mode == "full"
+	switch mode {
+	case "full", "incremental", "differential":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *MongoDBHandler) SupportsSelectiveRestore() bool {

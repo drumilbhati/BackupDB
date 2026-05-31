@@ -13,6 +13,7 @@ type Config struct {
 	DB            DBConfig            `mapstructure:"db"`
 	Backup        BackupConfig        `mapstructure:"backup"`
 	Storage       StorageConfig       `mapstructure:"storage"`
+	Catalog       CatalogConfig       `mapstructure:"catalog"`
 	Restore       RestoreConfig       `mapstructure:"restore"`
 	Logging       LoggingConfig       `mapstructure:"logging"`
 	Notifications NotificationsConfig `mapstructure:"notifications"`
@@ -37,16 +38,20 @@ type BackupConfig struct {
 type StorageConfig struct {
 	Type               string `mapstructure:"type"` // local, s3, gcs, azure
 	LocalPath          string `mapstructure:"local_path"`
-	Bucket             string `mapstructure:"bucket"`    // s3, gcs
-	Prefix             string `mapstructure:"prefix"`    // s3, gcs, azure
-	Region             string `mapstructure:"region"`    // s3
-	Endpoint           string `mapstructure:"endpoint"`  // s3 compatible
+	Bucket             string `mapstructure:"bucket"`   // s3, gcs
+	Prefix             string `mapstructure:"prefix"`   // s3, gcs, azure
+	Region             string `mapstructure:"region"`   // s3
+	Endpoint           string `mapstructure:"endpoint"` // s3 compatible
 	AccessKey          string `mapstructure:"access_key"`
 	SecretKey          string `mapstructure:"secret_key"`
 	Container          string `mapstructure:"container"` // azure
 	AzureAccountName   string `mapstructure:"azure_account_name"`
 	AzureAccountKey    string `mapstructure:"azure_account_key"`
 	GCSCredentialsFile string `mapstructure:"gcs_credentials_file"`
+}
+
+type CatalogConfig struct {
+	Path string `mapstructure:"path"`
 }
 
 type RestoreConfig struct {
@@ -133,6 +138,8 @@ func bindEnvVars(v *viper.Viper) {
 	v.BindEnv("storage.azure_account_key", "BACKUPDB_STORAGE_AZURE_ACCOUNT_KEY")
 	v.BindEnv("storage.gcs_credentials_file", "BACKUPDB_STORAGE_GCS_CREDENTIALS_FILE")
 
+	v.BindEnv("catalog.path", "BACKUPDB_CATALOG_PATH")
+
 	v.BindEnv("restore.backup_path", "BACKUPDB_RESTORE_BACKUP_PATH")
 	v.BindEnv("restore.tables", "BACKUPDB_RESTORE_TABLES")
 	v.BindEnv("restore.collections", "BACKUPDB_RESTORE_COLLECTIONS")
@@ -151,6 +158,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("backup.compress", "gzip")
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("output.format", "text")
+	v.SetDefault("catalog.path", "./.backupdb/catalog.json")
 }
 
 func expandEnvInConfig(cfg *Config) {
@@ -170,6 +178,8 @@ func expandEnvInConfig(cfg *Config) {
 	cfg.Storage.AzureAccountName = os.ExpandEnv(cfg.Storage.AzureAccountName)
 	cfg.Storage.AzureAccountKey = os.ExpandEnv(cfg.Storage.AzureAccountKey)
 	cfg.Storage.GCSCredentialsFile = os.ExpandEnv(cfg.Storage.GCSCredentialsFile)
+
+	cfg.Catalog.Path = os.ExpandEnv(cfg.Catalog.Path)
 
 	cfg.Restore.BackupPath = os.ExpandEnv(cfg.Restore.BackupPath)
 	cfg.Logging.File = os.ExpandEnv(cfg.Logging.File)

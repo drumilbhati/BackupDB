@@ -66,14 +66,14 @@ func (h *MySQLHandler) PrepareBackup(cfg *config.Config) (*BackupContext, error)
 
 func (h *MySQLHandler) StreamBackup(ctx *BackupContext, sink io.Writer) (*BackupStats, error) {
 	cmd := exec.Command("mysqldump", ctx.CmdArgs...)
-	
+
 	cmd.Env = os.Environ()
 	if ctx.DBConfig.Password != "" {
 		cmd.Env = append(cmd.Env, "MYSQL_PWD="+ctx.DBConfig.Password)
 	}
 
 	cmd.Stdout = sink
-	
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -118,14 +118,14 @@ func (h *MySQLHandler) PrepareRestore(cfg *config.Config) (*RestoreContext, erro
 
 func (h *MySQLHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (*RestoreStats, error) {
 	cmd := exec.Command("mysql", ctx.CmdArgs...)
-	
+
 	cmd.Env = os.Environ()
 	if ctx.DBConfig.Password != "" {
 		cmd.Env = append(cmd.Env, "MYSQL_PWD="+ctx.DBConfig.Password)
 	}
 
 	cmd.Stdin = source
-	
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -149,7 +149,12 @@ func (h *MySQLHandler) FinalizeRestore(ctx *RestoreContext, stats *RestoreStats)
 }
 
 func (h *MySQLHandler) SupportsMode(mode string) bool {
-	return mode == "full"
+	switch mode {
+	case "full", "incremental", "differential":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *MySQLHandler) SupportsSelectiveRestore() bool {

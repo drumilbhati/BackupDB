@@ -40,11 +40,13 @@ func init() {
 	rootCmd.PersistentFlags().String("log-file", "", "log file path (defaults to stdout)")
 	rootCmd.PersistentFlags().String("slack-webhook", "", "Slack webhook URL for notifications")
 	rootCmd.PersistentFlags().String("output", "text", "output format (text, json)")
+	rootCmd.PersistentFlags().String("catalog-path", "./.backupdb/catalog.json", "catalog file path for backup chain metadata")
 
 	v.BindPFlag("logging.level", rootCmd.PersistentFlags().Lookup("log-level"))
 	v.BindPFlag("logging.file", rootCmd.PersistentFlags().Lookup("log-file"))
 	v.BindPFlag("notifications.slack_webhook", rootCmd.PersistentFlags().Lookup("slack-webhook"))
 	v.BindPFlag("output.format", rootCmd.PersistentFlags().Lookup("output"))
+	v.BindPFlag("catalog.path", rootCmd.PersistentFlags().Lookup("catalog-path"))
 }
 
 // PrintResult outputs the command outcome in the requested format (text or JSON) and exits with the appropriate code.

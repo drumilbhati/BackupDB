@@ -46,6 +46,9 @@ func TestOrchestratorSQLiteE2E(t *testing.T) {
 			Type:      "local",
 			LocalPath: storagePath,
 		},
+		Catalog: config.CatalogConfig{
+			Path: filepath.Join(tempDir, "catalog.json"),
+		},
 		Output: config.OutputConfig{
 			Format: "text",
 		},
@@ -85,6 +88,9 @@ func TestOrchestratorSQLiteE2E(t *testing.T) {
 		Storage: config.StorageConfig{
 			Type: "local",
 		},
+		Catalog: config.CatalogConfig{
+			Path: filepath.Join(tempDir, "catalog.json"),
+		},
 		Output: config.OutputConfig{
 			Format: "text",
 		},
@@ -112,6 +118,118 @@ func TestOrchestratorSQLiteE2E(t *testing.T) {
 	expectedOutput := "Alice\nBob\n"
 	if string(outBytes) != expectedOutput {
 		t.Errorf("Restored data mismatch.\nExpected:\n%s\nGot:\n%s", expectedOutput, string(outBytes))
+	}
+}
+
+func TestOrchestratorSQLiteIncrementalAndDifferential(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 CLI not found in PATH, skipping integration test")
+	}
+
+	tempDir, err := os.MkdirTemp("", "backupdb_chain_test_")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	dbPath := filepath.Join(tempDir, "source.db")
+	storagePath := filepath.Join(tempDir, "backups")
+	catalogPath := filepath.Join(tempDir, "catalog.json")
+
+	runSQL := func(dbPath string, sql string) {
+		cmd := exec.Command("sqlite3", dbPath, sql)
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("failed to run sqlite command: %v", err)
+		}
+	}
+
+	runSQL(dbPath, "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users(name) VALUES('Alice'); INSERT INTO users(name) VALUES('Bob');")
+
+	baseCfg := func(mode string) *config.Config {
+		return &config.Config{
+			DB: config.DBConfig{
+				Type:     "sqlite",
+				Database: dbPath,
+			},
+			Backup: config.BackupConfig{
+				Mode:     mode,
+				Compress: "gzip",
+			},
+			Storage: config.StorageConfig{
+				Type:      "local",
+				LocalPath: storagePath,
+			},
+			Catalog: config.CatalogConfig{
+				Path: catalogPath,
+			},
+			Output: config.OutputConfig{
+				Format: "text",
+			},
+		}
+	}
+
+	fullOut, err, code := NewOrchestrator(baseCfg("full")).RunBackup()
+	if err != nil {
+		t.Fatalf("full backup failed with code %d: %v", code, err)
+	}
+
+	runSQL(dbPath, "INSERT INTO users(name) VALUES('Charlie');")
+	incOut, err, code := NewOrchestrator(baseCfg("incremental")).RunBackup()
+	if err != nil {
+		t.Fatalf("incremental backup failed with code %d: %v", code, err)
+	}
+
+	runSQL(dbPath, "INSERT INTO users(name) VALUES('Diana');")
+	diffOut, err, code := NewOrchestrator(baseCfg("differential")).RunBackup()
+	if err != nil {
+		t.Fatalf("differential backup failed with code %d: %v", code, err)
+	}
+
+	restoreExpected := func(backupPath, restoredDB, expected string) {
+		cfg := &config.Config{
+			DB: config.DBConfig{
+				Type:     "sqlite",
+				Database: restoredDB,
+			},
+			Restore: config.RestoreConfig{
+				BackupPath: backupPath,
+			},
+			Storage: config.StorageConfig{
+				Type: "local",
+			},
+			Catalog: config.CatalogConfig{
+				Path: catalogPath,
+			},
+			Output: config.OutputConfig{
+				Format: "text",
+			},
+		}
+
+		outcome, err, code := NewOrchestrator(cfg).RunRestore()
+		if err != nil {
+			t.Fatalf("restore failed with code %d: %v", code, err)
+		}
+		if outcome.Status != "success" {
+			t.Fatalf("expected restore status success, got %s", outcome.Status)
+		}
+
+		verifyCmd := exec.Command("sqlite3", restoredDB, "SELECT name FROM users ORDER BY id;")
+		outBytes, err := verifyCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("failed to query restored database: %v. Output: %s", err, string(outBytes))
+		}
+		if string(outBytes) != expected {
+			t.Fatalf("restored data mismatch.\nExpected:\n%s\nGot:\n%s", expected, string(outBytes))
+		}
+	}
+
+	incDB := filepath.Join(tempDir, "restored_inc.db")
+	diffDB := filepath.Join(tempDir, "restored_diff.db")
+	restoreExpected(incOut.ArtifactURI, incDB, "Alice\nBob\nCharlie\n")
+	restoreExpected(diffOut.ArtifactURI, diffDB, "Alice\nBob\nCharlie\nDiana\n")
+
+	if fullOut.BackupID == "" || incOut.BackupID == "" || diffOut.BackupID == "" {
+		t.Fatal("expected backup IDs for chain backups")
 	}
 }
 

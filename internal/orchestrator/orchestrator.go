@@ -11,9 +11,13 @@ import (
 	"hash"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/drumilbhati/BackupDB/internal/backupdelta"
+	"github.com/drumilbhati/BackupDB/internal/catalog"
 	"github.com/drumilbhati/BackupDB/internal/config"
 	"github.com/drumilbhati/BackupDB/internal/db"
 	"github.com/drumilbhati/BackupDB/internal/storage"
@@ -52,6 +56,136 @@ type RestoreOutcome struct {
 
 func NewOrchestrator(cfg *config.Config) *Orchestrator {
 	return &Orchestrator{cfg: cfg}
+}
+
+func (o *Orchestrator) catalogPath() string {
+	if strings.TrimSpace(o.cfg.Catalog.Path) == "" {
+		return "./.backupdb/catalog.json"
+	}
+	return o.cfg.Catalog.Path
+}
+
+func (o *Orchestrator) loadCatalog() (*catalog.Catalog, error) {
+	return catalog.Load(o.catalogPath())
+}
+
+func (o *Orchestrator) saveCatalog(c *catalog.Catalog) error {
+	return c.Save(o.catalogPath())
+}
+
+func (o *Orchestrator) selectBasisEntry(c *catalog.Catalog, mode string) (*catalog.Entry, error) {
+	dbType := o.cfg.DB.Type
+	dbName := o.cfg.DB.Database
+
+	switch strings.ToLower(mode) {
+	case "incremental":
+		entry, ok := c.LatestForDatabase(dbType, dbName)
+		if !ok {
+			return nil, fmt.Errorf("no previous backup found for incremental mode; create a full backup first")
+		}
+		return entry, nil
+	case "differential":
+		entry, ok := c.LatestFullForDatabase(dbType, dbName)
+		if !ok {
+			return nil, fmt.Errorf("no full backup found for differential mode; create a full backup first")
+		}
+		return entry, nil
+	default:
+		return nil, nil
+	}
+}
+
+func (o *Orchestrator) readArtifactBytes(adapter storage.StorageAdapter, uri string) ([]byte, error) {
+	ref := storage.ArtifactRef{URI: uri, StorageType: o.cfg.Storage.Type}
+	rc, err := adapter.Read(ref)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+
+	var reader io.Reader = rc
+	lowerPath := strings.ToLower(uri)
+	if strings.HasSuffix(lowerPath, ".gz") {
+		gr, err := gzip.NewReader(rc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize gzip decompressor: %w", err)
+		}
+		defer gr.Close()
+		reader = gr
+	} else if strings.HasSuffix(lowerPath, ".zst") {
+		zr, err := zstd.NewReader(rc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize zstd decompressor: %w", err)
+		}
+		defer zr.Close()
+		reader = zr
+	}
+
+	return io.ReadAll(reader)
+}
+
+func (o *Orchestrator) resolveEntryBytes(c *catalog.Catalog, adapter storage.StorageAdapter, entry *catalog.Entry) ([]byte, error) {
+	if entry == nil {
+		return nil, fmt.Errorf("missing catalog entry")
+	}
+
+	chain, err := c.ChainTo(entry)
+	if err != nil {
+		return nil, err
+	}
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("empty backup chain")
+	}
+
+	current, err := o.readArtifactBytes(adapter, chain[0].ArtifactURI)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 1; i < len(chain); i++ {
+		patchBytes, err := o.readArtifactBytes(adapter, chain[i].ArtifactURI)
+		if err != nil {
+			return nil, err
+		}
+		current, err = backupdelta.ApplyDelta(current, patchBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to apply backup delta for %s: %w", chain[i].BackupID, err)
+		}
+	}
+
+	return current, nil
+}
+
+func compressArtifactBytes(raw []byte, format string) ([]byte, error) {
+	switch strings.ToLower(format) {
+	case "gzip":
+		var buf bytes.Buffer
+		gw := gzip.NewWriter(&buf)
+		if _, err := gw.Write(raw); err != nil {
+			_ = gw.Close()
+			return nil, fmt.Errorf("failed to compress artifact with gzip: %w", err)
+		}
+		if err := gw.Close(); err != nil {
+			return nil, fmt.Errorf("failed to finalize gzip artifact: %w", err)
+		}
+		return buf.Bytes(), nil
+	case "zstd":
+		var buf bytes.Buffer
+		zw, err := zstd.NewWriter(&buf)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize zstd compressor: %w", err)
+		}
+		if _, err := zw.Write(raw); err != nil {
+			zw.Close()
+			return nil, fmt.Errorf("failed to compress artifact with zstd: %w", err)
+		}
+		if err := zw.Close(); err != nil {
+			return nil, fmt.Errorf("failed to finalize zstd artifact: %w", err)
+		}
+		return buf.Bytes(), nil
+	default:
+		return raw, nil
+	}
 }
 
 func (o *Orchestrator) SelectDbHandler(dbType string) (db.DbHandler, error) {
@@ -137,56 +271,121 @@ func (o *Orchestrator) RunBackup() (*BackupOutcome, error, int) {
 		return nil, fmt.Errorf("failed to prepare backup: %w", err), ExitBackupFailure
 	}
 
-	pr, pw := io.Pipe()
-
-	// Wrap pipe writer with compressor
-	var compWriter io.WriteCloser
-	var compErr error
-	compressFormat := strings.ToLower(o.cfg.Backup.Compress)
-	if compressFormat == "gzip" {
-		compWriter = gzip.NewWriter(pw)
-	} else if compressFormat == "zstd" {
-		compWriter, compErr = zstd.NewWriter(pw)
-		if compErr != nil {
-			pw.CloseWithError(compErr)
-			o.notifySlack(backupID, "failure", 0, 0, "", compErr)
-			return nil, fmt.Errorf("failed to initialize zstd compressor: %w", compErr), ExitBackupFailure
-		}
-	} else {
-		compWriter = &nopWriteCloser{pw}
+	cat, err := o.loadCatalog()
+	if err != nil {
+		o.notifySlack(backupID, "failure", 0, 0, "", err)
+		return nil, err, ExitBackupFailure
 	}
 
-	// Streaming backup in a goroutine
-	go func() {
-		var streamErr error
-		defer func() {
-			compWriter.Close()
-			if streamErr != nil {
-				pw.CloseWithError(streamErr)
-			} else {
-				pw.Close()
-			}
-		}()
+	mode := strings.ToLower(o.cfg.Backup.Mode)
+	basisEntry, err := o.selectBasisEntry(cat, mode)
+	if err != nil {
+		o.notifySlack(backupID, "failure", 0, 0, "", err)
+		return nil, fmt.Errorf("failed to resolve backup basis: %w", err), ExitBackupFailure
+	}
 
-		stats, err := dbHandler.StreamBackup(backupCtx, compWriter)
+	tempDir, err := os.MkdirTemp("", "backupdb_dump_*")
+	if err != nil {
+		o.notifySlack(backupID, "failure", 0, 0, "", err)
+		return nil, fmt.Errorf("failed to create temp backup directory: %w", err), ExitBackupFailure
+	}
+	defer os.RemoveAll(tempDir)
+
+	dumpPath := filepath.Join(tempDir, "current.dump")
+	dumpFile, err := os.Create(dumpPath)
+	if err != nil {
+		o.notifySlack(backupID, "failure", 0, 0, "", err)
+		return nil, fmt.Errorf("failed to create temp dump file: %w", err), ExitBackupFailure
+	}
+
+	stats, streamErr := dbHandler.StreamBackup(backupCtx, dumpFile)
+	closeErr := dumpFile.Close()
+	if streamErr != nil {
+		o.notifySlack(backupID, "failure", 0, 0, "", streamErr)
+		return nil, fmt.Errorf("backup stream failed: %w", streamErr), ExitBackupFailure
+	}
+	if closeErr != nil {
+		o.notifySlack(backupID, "failure", 0, 0, "", closeErr)
+		return nil, fmt.Errorf("failed to close temp dump file: %w", closeErr), ExitBackupFailure
+	}
+
+	currentDumpBytes, err := os.ReadFile(dumpPath)
+	if err != nil {
+		o.notifySlack(backupID, "failure", 0, 0, "", err)
+		return nil, fmt.Errorf("failed to read temp dump file: %w", err), ExitBackupFailure
+	}
+
+	if err := dbHandler.FinalizeBackup(backupCtx, stats); err != nil {
+		o.notifySlack(backupID, "failure", int64(len(currentDumpBytes)), 0, "", err)
+		return nil, fmt.Errorf("failed to finalize backup: %w", err), ExitBackupFailure
+	}
+
+	artifactBytes := currentDumpBytes
+	artifactKind := "full"
+	basisID := ""
+	parentID := ""
+	chainID := backupID
+	sequence := 1
+
+	switch mode {
+	case "incremental":
+		if basisEntry == nil {
+			err := fmt.Errorf("incremental backup requires a previous backup")
+			o.notifySlack(backupID, "failure", 0, 0, "", err)
+			return nil, err, ExitInvalidInput
+		}
+		basisID = basisEntry.BackupID
+		parentID = basisEntry.BackupID
+		chainID = basisEntry.ChainID
+		sequence = basisEntry.Sequence + 1
+		baseBytes, err := o.resolveEntryBytes(cat, storageAdapter, basisEntry)
 		if err != nil {
-			streamErr = err
+			o.notifySlack(backupID, "failure", 0, 0, "", err)
+			return nil, fmt.Errorf("failed to resolve incremental basis: %w", err), ExitBackupFailure
 		}
-		_ = stats
-	}()
-
-	// Read from pipe, calculate SHA256 and size, and write to storage
-	hasher := sha256.New()
-	tr := &trackingReader{
-		r: pr,
-		h: hasher,
+		artifactBytes, err = backupdelta.EncodeDelta(baseBytes, currentDumpBytes)
+		if err != nil {
+			o.notifySlack(backupID, "failure", 0, 0, "", err)
+			return nil, fmt.Errorf("failed to create incremental delta: %w", err), ExitBackupFailure
+		}
+		artifactKind = "patch"
+	case "differential":
+		if basisEntry == nil {
+			err := fmt.Errorf("differential backup requires a previous full backup")
+			o.notifySlack(backupID, "failure", 0, 0, "", err)
+			return nil, err, ExitInvalidInput
+		}
+		basisID = basisEntry.BackupID
+		parentID = basisEntry.BackupID
+		chainID = basisEntry.ChainID
+		sequence = basisEntry.Sequence + 1
+		baseBytes, err := o.resolveEntryBytes(cat, storageAdapter, basisEntry)
+		if err != nil {
+			o.notifySlack(backupID, "failure", 0, 0, "", err)
+			return nil, fmt.Errorf("failed to resolve differential basis: %w", err), ExitBackupFailure
+		}
+		artifactBytes, err = backupdelta.EncodeDelta(baseBytes, currentDumpBytes)
+		if err != nil {
+			o.notifySlack(backupID, "failure", 0, 0, "", err)
+			return nil, fmt.Errorf("failed to create differential delta: %w", err), ExitBackupFailure
+		}
+		artifactKind = "patch"
 	}
 
+	storedBytes, err := compressArtifactBytes(artifactBytes, strings.ToLower(o.cfg.Backup.Compress))
+	if err != nil {
+		o.notifySlack(backupID, "failure", 0, 0, "", err)
+		return nil, err, ExitBackupFailure
+	}
+
+	hasher := sha256.New()
+	tr := &trackingReader{r: bytes.NewReader(storedBytes), h: hasher}
 	meta := storage.ArtifactMetadata{
-		DBType:      o.cfg.DB.Type,
-		BackupMode:  o.cfg.Backup.Mode,
-		Timestamp:   time.Now().Format("20060102_150405"),
-		Compression: compressFormat,
+		DBType:       o.cfg.DB.Type,
+		BackupMode:   mode,
+		ArtifactKind: artifactKind,
+		Timestamp:    time.Now().Format("20060102_150405.000000000"),
+		Compression:  strings.ToLower(o.cfg.Backup.Compress),
 	}
 
 	ref, err := storageAdapter.Write(tr, meta)
@@ -195,14 +394,31 @@ func (o *Orchestrator) RunBackup() (*BackupOutcome, error, int) {
 		return nil, fmt.Errorf("storage write failed: %w", err), ExitStorageFailure
 	}
 
-	// Post-write metrics update
 	checksumStr := hex.EncodeToString(hasher.Sum(nil))
 	ref.Checksum = checksumStr
 	ref.SizeBytes = tr.n
 
-	if err := dbHandler.FinalizeBackup(backupCtx, &db.BackupStats{BytesWritten: tr.n}); err != nil {
+	entry := catalog.Entry{
+		BackupID:       backupID,
+		ChainID:        chainID,
+		DBType:         o.cfg.DB.Type,
+		Database:       o.cfg.DB.Database,
+		Mode:           mode,
+		ArtifactKind:   artifactKind,
+		ArtifactURI:    ref.URI,
+		BasisBackupID:  basisID,
+		ParentBackupID: parentID,
+		Sequence:       sequence,
+		Compression:    strings.ToLower(o.cfg.Backup.Compress),
+		Checksum:       checksumStr,
+		SizeBytes:      tr.n,
+		CreatedAt:      time.Now().UTC(),
+	}
+
+	cat.Add(entry)
+	if err := o.saveCatalog(cat); err != nil {
 		o.notifySlack(backupID, "failure", tr.n, 0, ref.URI, err)
-		return nil, fmt.Errorf("failed to finalize backup: %w", err), ExitBackupFailure
+		return nil, fmt.Errorf("failed to persist catalog entry: %w", err), ExitBackupFailure
 	}
 
 	duration := time.Since(startTime)
@@ -216,7 +432,6 @@ func (o *Orchestrator) RunBackup() (*BackupOutcome, error, int) {
 	}
 
 	o.notifySlack(backupID, "success", tr.n, duration, ref.URI, nil)
-
 	return outcome, nil, ExitSuccess
 }
 
@@ -243,40 +458,22 @@ func (o *Orchestrator) RunRestore() (*RestoreOutcome, error, int) {
 		return nil, fmt.Errorf("failed to prepare restore: %w", err), ExitRestoreFailure
 	}
 
-	// Retrieve backup stream
-	ref := storage.ArtifactRef{
-		URI:         o.cfg.Restore.BackupPath,
-		StorageType: o.cfg.Storage.Type,
-	}
-
-	rc, err := storageAdapter.Read(ref)
+	cat, err := o.loadCatalog()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read backup from storage: %w", err), ExitStorageFailure
-	}
-	defer rc.Close()
-
-	// Decompress stream based on path extension
-	var decompressed io.Reader
-	lowerPath := strings.ToLower(o.cfg.Restore.BackupPath)
-	if strings.HasSuffix(lowerPath, ".gz") {
-		gr, err := gzip.NewReader(rc)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize gzip decompressor: %w", err), ExitRestoreFailure
-		}
-		defer gr.Close()
-		decompressed = gr
-	} else if strings.HasSuffix(lowerPath, ".zst") {
-		zr, err := zstd.NewReader(rc)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize zstd decompressor: %w", err), ExitRestoreFailure
-		}
-		defer zr.Close()
-		decompressed = zr
-	} else {
-		decompressed = rc
+		return nil, fmt.Errorf("failed to load backup catalog: %w", err), ExitRestoreFailure
 	}
 
-	stats, err := dbHandler.StreamRestore(restoreCtx, decompressed)
+	target, ok := cat.FindByURI(o.cfg.Restore.BackupPath)
+	if !ok {
+		return nil, fmt.Errorf("backup path not found in catalog: %s", o.cfg.Restore.BackupPath), ExitRestoreFailure
+	}
+
+	restoredBytes, err := o.resolveEntryBytes(cat, storageAdapter, target)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reconstruct backup chain: %w", err), ExitRestoreFailure
+	}
+
+	stats, err := dbHandler.StreamRestore(restoreCtx, bytes.NewReader(restoredBytes))
 	if err != nil {
 		return nil, fmt.Errorf("restore stream failed: %w", err), ExitRestoreFailure
 	}

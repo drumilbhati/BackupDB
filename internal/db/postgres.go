@@ -72,7 +72,7 @@ func (h *PostgresHandler) PrepareBackup(cfg *config.Config) (*BackupContext, err
 
 func (h *PostgresHandler) StreamBackup(ctx *BackupContext, sink io.Writer) (*BackupStats, error) {
 	cmd := exec.Command("pg_dump", ctx.CmdArgs...)
-	
+
 	// Set password env var
 	cmd.Env = os.Environ()
 	if ctx.DBConfig.Password != "" {
@@ -80,7 +80,7 @@ func (h *PostgresHandler) StreamBackup(ctx *BackupContext, sink io.Writer) (*Bac
 	}
 
 	cmd.Stdout = sink
-	
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -126,14 +126,14 @@ func (h *PostgresHandler) PrepareRestore(cfg *config.Config) (*RestoreContext, e
 func (h *PostgresHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (*RestoreStats, error) {
 	// We use psql to restore plain SQL format backups
 	cmd := exec.Command("psql", ctx.CmdArgs...)
-	
+
 	cmd.Env = os.Environ()
 	if ctx.DBConfig.Password != "" {
 		cmd.Env = append(cmd.Env, "PGPASSWORD="+ctx.DBConfig.Password)
 	}
 
 	cmd.Stdin = source
-	
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -157,8 +157,12 @@ func (h *PostgresHandler) FinalizeRestore(ctx *RestoreContext, stats *RestoreSta
 }
 
 func (h *PostgresHandler) SupportsMode(mode string) bool {
-	// Only full backup is supported via standard pg_dump
-	return mode == "full"
+	switch mode {
+	case "full", "incremental", "differential":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *PostgresHandler) SupportsSelectiveRestore() bool {

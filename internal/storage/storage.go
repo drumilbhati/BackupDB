@@ -5,13 +5,14 @@ import (
 )
 
 type ArtifactMetadata struct {
-	DBType      string
-	BackupMode  string
-	Timestamp   string
-	Checksum    string
-	SizeBytes   int64
-	Compression string
-	Labels      map[string]string
+	DBType       string
+	BackupMode   string
+	ArtifactKind string
+	Timestamp    string
+	Checksum     string
+	SizeBytes    int64
+	Compression  string
+	Labels       map[string]string
 }
 
 type ArtifactRef struct {

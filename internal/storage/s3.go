@@ -79,6 +79,9 @@ func (a *S3Adapter) Write(input io.Reader, meta ArtifactMetadata) (ArtifactRef, 
 	if meta.DBType == "mongodb" {
 		ext = "archive"
 	}
+	if meta.ArtifactKind == "patch" {
+		ext = "patch"
+	}
 
 	filename := fmt.Sprintf("backup_%s.%s", meta.Timestamp, ext)
 	if meta.Compression == "gzip" {

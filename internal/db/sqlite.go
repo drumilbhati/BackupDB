@@ -89,7 +89,7 @@ func (h *SQLiteHandler) StreamBackup(ctx *BackupContext, sink io.Writer) (*Backu
 
 	cmd := exec.Command("sqlite3", ctx.CmdArgs...)
 	cmd.Stdout = sink
-	
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -136,7 +136,7 @@ func (h *SQLiteHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (*R
 
 	cmd := exec.Command("sqlite3", ctx.CmdArgs...)
 	cmd.Stdin = source
-	
+
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
@@ -160,7 +160,12 @@ func (h *SQLiteHandler) FinalizeRestore(ctx *RestoreContext, stats *RestoreStats
 }
 
 func (h *SQLiteHandler) SupportsMode(mode string) bool {
-	return mode == "full"
+	switch mode {
+	case "full", "incremental", "differential":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *SQLiteHandler) SupportsSelectiveRestore() bool {
