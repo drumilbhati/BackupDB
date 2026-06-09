@@ -43,9 +43,9 @@ flowchart LR
 
 - **CLI & Config**: The CLI layer captures all database configurations (engine type, credentials, host/port, database name), backup/restore mode, compression formats, and storage backend settings. The configuration layer resolves these with strict precedence (CLI flags > Environment variables > Configuration file > Defaults) and redacts secrets when emitting logs or outputs.
 - **TUI & Config**: The terminal UI is another entry point in the same binary. It reuses config loading and validation, then hands off to the orchestrator instead of duplicating backup logic.
-- **Orchestrator**: Enforces a robust orchestrating workflow for backup and restore operations. It queries the target database connection, validates the storage backend targets, coordinates compression pipeline streaming, calculates integrity hashes (SHA256) on-the-fly, and triggers completion callbacks (e.g., Slack notification webhooks) upon termination.
-- **DBHandler (Common Interface)**: Exposes a standardized contract ([DbHandler](file:///Users/drumilbhati/Documents/BackupDB/internal/db/db.go)) across all target DBMS engines (Postgres, MySQL, MongoDB, SQLite). DB-specific details such as streaming commands (`pg_dump`, `mysqldump`, `mongodump`, SQLite file copies) are encapsulated behind this interface.
-- **Storage Interface**: Exposes a standardized contract ([StorageAdapter](file:///Users/drumilbhati/Documents/BackupDB/internal/storage/storage.go)) for artifact persistence across different storage providers (Local, S3, GCS, Azure Blob). This enables the Orchestrator to stream backup and restore payloads directly to and from these backends without coupling database logic to the storage provider.
+- **Orchestrator**: Enforces a robust orchestrating workflow for backup and restore operations. It queries the target database connection, validates the storage backend targets, coordinates compression pipeline streaming, calculates integrity hashes (SHA256) on-the-fly, and triggers completion callbacks (e.g., Slack notification webhooks) upon termination. For incremental and differential modes, it leverages a local metadata **Catalog** to track backup chains and **BackupDelta** for high-efficiency delta encoding.
+- **DBHandler (Common Interface)**: Exposes a standardized contract ([DbHandler](./internal/db/db.go)) across all target DBMS engines (Postgres, MySQL, MongoDB, SQLite). DB-specific details such as streaming commands (`pg_dump`, `mysqldump`, `mongodump`, SQLite file copies) are encapsulated behind this interface.
+- **Storage Interface**: Exposes a standardized contract ([StorageAdapter](./internal/storage/storage.go)) for artifact persistence across different storage providers (Local, S3, GCS, Azure Blob). This enables the Orchestrator to stream backup and restore payloads directly to and from these backends without coupling database logic to the storage provider.
 
 ---
 
@@ -78,3 +78,6 @@ Implements specific drivers and subprocess-piping tools for DBMS targets:
 
 ### 5. Orchestrator (`internal/orchestrator`)
 Ties DBHandlers and StorageAdapters together. Manages on-the-fly SHA256 checksum tracking, compression (`gzip`/`zstd`), and webhook notification dispatches.
+
+- **Catalog (`internal/catalog`)**: A local JSON-based metadata store that tracks every backup artifact, its parent (for incremental chains), its sequence, and its SHA256 checksum. This allows the orchestrator to reconstruct full database states from incremental patches.
+- **BackupDelta (`internal/backupdelta`)**: Implements delta encoding using the `diffmatchpatch` algorithm. It generates compact patches between a base backup and the current state, significantly reducing storage footprint for large databases with frequent updates.

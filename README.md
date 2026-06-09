@@ -4,7 +4,7 @@
 
 It supports PostgreSQL, MySQL, MongoDB, and SQLite, with seamless integrations for AWS S3, Google Cloud Storage (GCS), Azure Blob Storage, and the Local Filesystem.
 
-For details on architecture and design decisions, see [IMPLEMENTATION.md](file:///Users/drumilbhati/Documents/BackupDB/IMPLEMENTATION.md).
+For details on architecture and design decisions, see [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ---
 
@@ -14,6 +14,7 @@ For details on architecture and design decisions, see [IMPLEMENTATION.md](file:/
 - **Flexible Storage Adapters**: Direct stream uploads/downloads using official cloud SDKs (AWS, GCS, Azure) or local files.
 - **On-the-Fly Compression**: Support for `gzip` and `zstd` (via high-performance `klauspost/compress/zstd`) stream compression.
 - **Integrity Validation**: Computes and tracks exact SHA256 checksums and file sizes on-the-fly during pipeline streaming.
+- **Incremental & Differential Backups**: High-efficiency delta encoding support for reduced storage usage and faster transfers (managed via a local metadata catalog).
 - **Credentials Security**: Automatically redacts database passwords and cloud API keys from logs and configuration dumps.
 - **Slack Integrations**: Notifies a Slack channel on success/failure using secure webhook integrations.
 - **Config Precedence**: Viper-based configuration loading hierarchy (CLI Flags > Environment Variables > YAML file > Defaults).
@@ -61,6 +62,7 @@ Example commands:
 bin/backupdb validate --db postgres --host 127.0.0.1 --port 5432 --user backupdb --password backupdb --database appdb
 bin/backupdb backup --db mysql --host 127.0.0.1 --port 3306 --user backupdb --password backupdb --database appdb --storage local --local-path ./backups/mysql
 bin/backupdb backup --db mongodb --host 127.0.0.1 --port 27017 --database appdb --storage local --local-path ./backups/mongo
+bin/backupdb tui
 ```
 
 ---
@@ -81,6 +83,7 @@ backupdb [command] [flags]
 | `backup` | Triggers the backup pipeline (connect, dump, compress, checksum, upload, notify). |
 | `restore` | Triggers the restore pipeline (download, decompress, database import). |
 | `config` | Merges configurations from all sources, redacts credentials, and outputs resolved settings. |
+| `tui` | Launches an interactive terminal UI for guided workflows. |
 | `version` | Prints the utility version (current version `1.0.0`). |
 
 ---
@@ -96,6 +99,7 @@ These flags can be appended to any command:
 - `--log-file <path>`: Log file path (defaults to stdout).
 - `--slack-webhook <url>`: Slack incoming webhook URL for notifications.
 - `--output <format>`: Format for command results (`text` or `json`, default is `text`).
+- `--catalog-path <path>`: Path to the local metadata catalog for tracking backup chains (default `./.backupdb/catalog.json`).
 
 ---
 

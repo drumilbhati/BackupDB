@@ -125,6 +125,15 @@ func (h *MongoDBHandler) PrepareRestore(cfg *config.Config) (*RestoreContext, er
 		args = append(args, "--password", cfg.DB.Password)
 	}
 
+	// Selective Restore: Filter by collections if specified
+	if len(cfg.Restore.Collections) > 0 {
+		for _, col := range cfg.Restore.Collections {
+			// MongoDB expects <db>.<collection> for nsInclude
+			ns := fmt.Sprintf("%s.%s", cfg.DB.Database, col)
+			args = append(args, "--nsInclude", ns)
+		}
+	}
+
 	return &RestoreContext{
 		DBConfig: cfg.DB,
 		DBName:   cfg.DB.Database,
@@ -168,5 +177,5 @@ func (h *MongoDBHandler) SupportsMode(mode string) bool {
 }
 
 func (h *MongoDBHandler) SupportsSelectiveRestore() bool {
-	return false
+	return true
 }

@@ -552,6 +552,8 @@ func buildFields(cfg *config.Config, action actionKind) []field {
 	case actionRestore:
 		fields = append(fields,
 			newStringField("Backup Path", cfg.Restore.BackupPath, true, false),
+			newStringField("Tables", strings.Join(cfg.Restore.Tables, ","), false, false),
+			newStringField("Collections", strings.Join(cfg.Restore.Collections, ","), false, false),
 			newEnumField("Storage", []string{"local", "s3", "gcs", "azure"}, cfg.Storage.Type, true),
 			newStringField("Local Path", cfg.Storage.LocalPath, false, false),
 			newStringField("Bucket", cfg.Storage.Bucket, false, false),
@@ -619,6 +621,24 @@ func applyFields(cfg *config.Config, fields []field, action actionKind) {
 			cfg.Storage.GCSCredentialsFile = f.value()
 		case "Backup Path":
 			cfg.Restore.BackupPath = f.value()
+		case "Tables":
+			if v := f.value(); v != "" {
+				cfg.Restore.Tables = strings.Split(v, ",")
+				for i := range cfg.Restore.Tables {
+					cfg.Restore.Tables[i] = strings.TrimSpace(cfg.Restore.Tables[i])
+				}
+			} else {
+				cfg.Restore.Tables = nil
+			}
+		case "Collections":
+			if v := f.value(); v != "" {
+				cfg.Restore.Collections = strings.Split(v, ",")
+				for i := range cfg.Restore.Collections {
+					cfg.Restore.Collections[i] = strings.TrimSpace(cfg.Restore.Collections[i])
+				}
+			} else {
+				cfg.Restore.Collections = nil
+			}
 		}
 	}
 	if action == actionValidate {

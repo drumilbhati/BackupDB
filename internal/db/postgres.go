@@ -61,6 +61,7 @@ func (h *PostgresHandler) PrepareBackup(cfg *config.Config) (*BackupContext, err
 		"-p", strconv.Itoa(port),
 		"-U", cfg.DB.User,
 		"-d", cfg.DB.Database,
+		"-Fc", // Use custom format for selective restores
 	}
 
 	return &BackupContext{
@@ -109,11 +110,20 @@ func (h *PostgresHandler) PrepareRestore(cfg *config.Config) (*RestoreContext, e
 		port = 5432
 	}
 
+	// Use pg_restore for custom format backups
 	args := []string{
 		"-h", cfg.DB.Host,
 		"-p", strconv.Itoa(port),
 		"-U", cfg.DB.User,
 		"-d", cfg.DB.Database,
+		"--no-owner", // Often needed for restores to different users
+	}
+
+	// Selective Restore: Add table filters
+	if len(cfg.Restore.Tables) > 0 {
+		for _, table := range cfg.Restore.Tables {
+			args = append(args, "-t", table)
+		}
 	}
 
 	return &RestoreContext{
@@ -124,8 +134,8 @@ func (h *PostgresHandler) PrepareRestore(cfg *config.Config) (*RestoreContext, e
 }
 
 func (h *PostgresHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (*RestoreStats, error) {
-	// We use psql to restore plain SQL format backups
-	cmd := exec.Command("psql", ctx.CmdArgs...)
+	// Use pg_restore
+	cmd := exec.Command("pg_restore", ctx.CmdArgs...)
 
 	cmd.Env = os.Environ()
 	if ctx.DBConfig.Password != "" {
@@ -140,13 +150,13 @@ func (h *PostgresHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start psql: %w", err)
+		return nil, fmt.Errorf("failed to start pg_restore: %w", err)
 	}
 
 	stderrBytes, _ := io.ReadAll(stderr)
 
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("psql restore failed: %s (%w)", string(stderrBytes), err)
+		return nil, fmt.Errorf("pg_restore failed: %s (%w)", string(stderrBytes), err)
 	}
 
 	return &RestoreStats{}, nil
@@ -166,5 +176,5 @@ func (h *PostgresHandler) SupportsMode(mode string) bool {
 }
 
 func (h *PostgresHandler) SupportsSelectiveRestore() bool {
-	return false
+	return true
 }

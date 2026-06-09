@@ -109,14 +109,25 @@ func (h *MySQLHandler) PrepareRestore(cfg *config.Config) (*RestoreContext, erro
 		cfg.DB.Database,
 	}
 
+	meta := make(map[string]interface{})
+	if len(cfg.Restore.Tables) > 0 {
+		meta["tables"] = cfg.Restore.Tables
+	}
+
 	return &RestoreContext{
 		DBConfig: cfg.DB,
 		DBName:   cfg.DB.Database,
 		CmdArgs:  args,
+		Metadata: meta,
 	}, nil
 }
 
 func (h *MySQLHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (*RestoreStats, error) {
+	// Apply selective restore filter if tables are specified in metadata
+	if tables, ok := ctx.Metadata["tables"].([]string); ok && len(tables) > 0 {
+		source = NewSQLFilterReader(source, tables, false)
+	}
+
 	cmd := exec.Command("mysql", ctx.CmdArgs...)
 
 	cmd.Env = os.Environ()
@@ -158,5 +169,5 @@ func (h *MySQLHandler) SupportsMode(mode string) bool {
 }
 
 func (h *MySQLHandler) SupportsSelectiveRestore() bool {
-	return false
+	return true
 }

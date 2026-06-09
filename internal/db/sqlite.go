@@ -118,10 +118,16 @@ func (h *SQLiteHandler) PrepareRestore(cfg *config.Config) (*RestoreContext, err
 		cfg.DB.Database,
 	}
 
+	meta := make(map[string]interface{})
+	if len(cfg.Restore.Tables) > 0 {
+		meta["tables"] = cfg.Restore.Tables
+	}
+
 	return &RestoreContext{
 		DBConfig: cfg.DB,
 		DBName:   cfg.DB.Database,
 		CmdArgs:  args,
+		Metadata: meta,
 	}, nil
 }
 
@@ -133,6 +139,11 @@ func (h *SQLiteHandler) StreamRestore(ctx *RestoreContext, source io.Reader) (*R
 
 	// Remove target file first to ensure a clean restore
 	_ = os.Remove(ctx.DBConfig.Database)
+
+	// Apply selective restore filter if tables are specified in metadata
+	if tables, ok := ctx.Metadata["tables"].([]string); ok && len(tables) > 0 {
+		source = NewSQLFilterReader(source, tables, true)
+	}
 
 	cmd := exec.Command("sqlite3", ctx.CmdArgs...)
 	cmd.Stdin = source
@@ -169,5 +180,5 @@ func (h *SQLiteHandler) SupportsMode(mode string) bool {
 }
 
 func (h *SQLiteHandler) SupportsSelectiveRestore() bool {
-	return false
+	return true
 }
